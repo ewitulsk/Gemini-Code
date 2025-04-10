@@ -8,8 +8,9 @@ from vertexai.preview import rag
 from google.api_core.exceptions import NotFound
 import logging
 from dotenv import load_dotenv
-from utils import load_raw_ignore_patterns
+from .utils import load_raw_ignore_patterns
 from pathlib import Path
+from .background_state import BackgroundRAGState
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO,
@@ -54,11 +55,12 @@ def _ensure_gcs_bucket_exists(bucket_name: str, project_id: str, location: str):
 
 def upload_directory_to_gcs(local_directory_path: str,
                             bucket_name: str,
+                            project_id: str,
                             gcs_prefix: str = "code_upload/") -> str:
     if not os.path.isdir(local_directory_path):
         raise FileNotFoundError(
             f"Local directory not found: {local_directory_path}")
-    storage_client = storage.Client(project=PROJECT_ID)
+    storage_client = storage.Client(project=project_id)
     bucket = storage_client.bucket(bucket_name)
     local_directory_path = os.path.abspath(local_directory_path)
     ignore_file = os.path.join(local_directory_path, ".indexignore")
@@ -86,7 +88,7 @@ def upload_directory_to_gcs(local_directory_path: str,
                                 '/', pattern) or fnmatch.fnmatch(d, pattern)
                 for pattern in ignore_patterns)
             if is_ignored:
-                logging.info(
+                logging.debug(
                     f"  Ignoring directory: {rel_dir_path_normalized}/")
                 ignored_dirs_count += 1
             else:
@@ -102,12 +104,12 @@ def upload_directory_to_gcs(local_directory_path: str,
                 fnmatch.fnmatch(filename, pattern)
                 for pattern in ignore_patterns)
             if is_ignored:
-                logging.info(f"  Ignoring file: {relative_path_normalized}")
+                logging.debug(f"  Ignoring file: {relative_path_normalized}")
                 ignored_files += 1
                 continue
             gcs_path = os.path.join(gcs_prefix,
                                     relative_path_normalized).replace(
-                                        "\\\\", "/")
+                                        "\\", "/")
             try:
                 blob = bucket.blob(gcs_path)
                 blob.upload_from_filename(local_path)
@@ -127,43 +129,91 @@ def upload_directory_to_gcs(local_directory_path: str,
 
 
 def setup_rag_for_directory(local_directory_path: str,
-                            gcs_bucket_name: str) -> str | None:
-    if not PROJECT_ID:
-        logging.error("GOOGLE_CLOUD_PROJECT environment variable not set.")
-        raise ValueError("Set the GOOGLE_CLOUD_PROJECT environment variable.")
-    if not gcs_bucket_name:
-        raise ValueError("GCS bucket name must be provided.")
-    if not os.path.isdir(local_directory_path):
-        logging.error(
-            f"Error: Provided path is not a valid directory: {local_directory_path}"
-        )
+                            gcs_bucket_name: str,
+                            background_state: BackgroundRAGState) -> str | None:
+    """
+    Sets up RAG by uploading a directory to GCS and indexing it into a Vertex AI RAG Corpus.
+    Updates the background_state object with status and results.
+
+    Args:
+        local_directory_path: Path to the local code directory.
+        gcs_bucket_name: Name of the GCS bucket to use/create.
+        background_state: The BackgroundRAGState object to update.
+
+    Returns:
+        The full RAG Corpus resource name if successful, otherwise None.
+        Failure reasons are logged and stored in background_state.
+    """
+    project_id = background_state.project_id
+    location = background_state.location
+
+    if not project_id:
+        # Should not happen if background_state is initialized correctly
+        logging.error("Project ID missing in background state.")
+        background_state.set_status_failed("Project ID missing.")
         return None
+
+    if not gcs_bucket_name:
+        errmsg = "GCS bucket name must be provided."
+        logging.error(errmsg)
+        background_state.set_status_failed(errmsg)
+        return None
+
+    if not os.path.isdir(local_directory_path):
+        errmsg = f"Error: Provided path is not a valid directory: {local_directory_path}"
+        logging.error(errmsg)
+        background_state.set_status_failed(errmsg)
+        return None
+
     local_directory_path = os.path.abspath(local_directory_path)
     logging.info(f"Setting up RAG for directory: {local_directory_path}")
     logging.info(
-        f"Using Project: {PROJECT_ID}, Location: {LOCATION}, Bucket: {gcs_bucket_name}"
+        f"Using Project: {project_id}, Location: {location}, Bucket: {gcs_bucket_name}"
     )
+
+    # Set status to indicate setup has started
+    background_state.set_status_running_setup()
+
+    # Ensure aiplatform is initialized (needed for rag calls later)
+    # Note: This should already be done in the main thread before calling this worker,
+    # but doing it here ensures it works if called standalone (though that's not the plan).
     try:
-        aiplatform.init(project=PROJECT_ID, location=LOCATION)
+        aiplatform.init(project=project_id, location=location)
+        logging.info("Vertex AI SDK initialized for RAG setup.")
     except Exception as e:
-        logging.error(f"Failed to initialize Vertex AI SDK: {e}")
+        errmsg = f"Failed to initialize Vertex AI SDK: {e}"
+        logging.error(errmsg)
+        background_state.set_status_failed(errmsg)
         return None
+
+    # 1. Ensure GCS bucket exists
     try:
-        _ensure_gcs_bucket_exists(gcs_bucket_name, PROJECT_ID, LOCATION)
+        _ensure_gcs_bucket_exists(gcs_bucket_name, project_id, location)
     except Exception as e:
-        logging.error(f"Failed proceeding due to GCS bucket setup error: {e}")
+        errmsg = f"Failed proceeding due to GCS bucket setup error: {e}"
+        logging.error(errmsg)
+        background_state.set_status_failed(errmsg)
         return None
+
+    # 2. Upload directory to GCS
     gcs_uri_prefix = ""
     try:
         gcs_uri_prefix = upload_directory_to_gcs(local_directory_path,
                                                  gcs_bucket_name,
+                                                 project_id,
                                                  gcs_prefix="code_upload/")
     except FileNotFoundError as e:
-        logging.error(e)
+        errmsg = str(e)
+        logging.error(errmsg)
+        background_state.set_status_failed(errmsg)
         return None
     except Exception as e:
-        logging.error(f"Error uploading to GCS: {e}")
+        errmsg = f"Error uploading to GCS: {e}"
+        logging.error(errmsg)
+        background_state.set_status_failed(errmsg)
         return None
+
+    # 3. Find or Create RAG Corpus
     rag_corpus = None
     corpus_id = None
     try:
@@ -185,12 +235,19 @@ def setup_rag_for_directory(local_directory_path: str,
             logging.info(
                 f"Created RAG Corpus: {rag_corpus.name} (ID: {corpus_id})")
     except Exception as e:
-        logging.error(f"Error finding or creating RAG Corpus: {e}")
+        errmsg = f"Error finding or creating RAG Corpus: {e}"
+        logging.error(errmsg)
+        background_state.set_status_failed(errmsg)
         return None
+
+    # 4. Import Files into Corpus
     try:
         logging.info(
             f"Starting RAG file import from {gcs_uri_prefix} into {rag_corpus.name}..."
         )
+        # Note: import_files is asynchronous. It returns an LRO.
+        # For simplicity here, we'll treat initiating it as the "end" of this setup phase.
+        # A more robust implementation might poll the LRO, but that adds complexity.
         import_op = rag.import_files(
             corpus_name=rag_corpus.name,
             paths=[gcs_uri_prefix],
@@ -198,53 +255,18 @@ def setup_rag_for_directory(local_directory_path: str,
             chunk_overlap=100,
         )
         logging.info(
-            f"Import operation initiated. Result (if any): {import_op}")
+            f"Import operation initiated (LRO: {import_op.operation.name})."
+        )
         logging.info(
             f"File import and indexing likely completed or running for Corpus ID: {corpus_id}."
         )
+        # Don't set state to complete here, just return the corpus name.
+        # The next step (model init) will run, and the tool closure will handle the 'loading' state
+        # until the internal model is ready.
+        # We transition state in the worker thread *after* this function returns successfully.
         return rag_corpus.name
     except Exception as e:
-        logging.error(
-            f"Error importing files into RAG Corpus {rag_corpus.name}: {e}")
+        errmsg = f"Error importing files into RAG Corpus {rag_corpus.name}: {e}"
+        logging.error(errmsg)
+        background_state.set_status_failed(errmsg)
         return None
-
-
-if __name__ == "__main__":
-    if not PROJECT_ID:
-        print("Error: GOOGLE_CLOUD_PROJECT environment variable is not set.")
-        sys.exit(1)
-    user_identifier = ""
-    while not user_identifier:
-        user_input = input(
-            "Enter a unique identifier for your project (e.g., 'my-agent-proj', used for GCS bucket name): "
-        ).strip()
-        user_identifier = user_input.lower().replace(" ", "-")
-        if not _validate_bucket_name_component(user_identifier):
-            print(
-                "Invalid identifier. Use only lowercase letters, numbers, and hyphens."
-            )
-            user_identifier = ""
-        elif len(user_identifier) < 3 or len(user_identifier) > 20:
-            print("Identifier length must be between 3 and 20 characters.")
-            user_identifier = ""
-    final_bucket_name = f"{user_identifier}-rag-code-store"
-    print(f"Will use GCS Bucket: gs://{final_bucket_name}")
-    if len(sys.argv) < 2:
-        print("\nUsage: python rag_setup.py <path_to_local_code_directory>")
-        test_dir = os.path.abspath(
-            os.path.join(os.path.dirname(__file__), '..', '..'))
-        print(f"No directory provided. TESTING with: {test_dir}")
-        if not os.path.isdir(test_dir):
-            print(f"Test directory {test_dir} does not exist. Exiting.")
-            sys.exit(1)
-        local_dir = test_dir
-    else:
-        local_dir = sys.argv[1]
-    print("\n--- Starting RAG Setup ---")
-    corpus_name = setup_rag_for_directory(local_dir, final_bucket_name)
-    print("\n--- RAG Setup Finished ---")
-    if corpus_name:
-        print(f"Successfully set up RAG. Corpus Name: {corpus_name}")
-    else:
-        print("RAG setup failed. Check logs for details.")
-        sys.exit(1)

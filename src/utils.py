@@ -21,5 +21,4 @@ def load_raw_ignore_patterns(ignore_file_path: str) -> list[str]:
         logging.info(
             f"No .indexignore file found at {ignore_file_path}. No files will be ignored by pattern."
         )
-    print(f"Ignore Patterns: {patterns}")
     return patterns
