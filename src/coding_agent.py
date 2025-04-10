@@ -7,13 +7,21 @@ from google.adk.agents.callback_context import CallbackContext
 from google.cloud import aiplatform # Needed for init in callback
 from vertexai.preview import rag
 from vertexai.preview.generative_models import GenerativeModel, Tool
+from dotenv import load_dotenv
 
 # Import the factory function, not the old implementation
 from .rag_tool import create_rag_tool_closure
 from .state import RagState # Keep RagState if needed for type hints or instantiation
 
+load_dotenv()
+
 # Define the state file path (must match main.py)
 STATE_FILE = ".rag_state.json" 
+
+# --- Environment Variables for Models ---
+# Get model names from environment variables with defaults
+RAG_MODEL_ID = os.environ.get("RAG_MODEL", "gemini-2.0-flash") 
+MAIN_MODEL_ID = os.environ.get("MAIN_MODEL", "gemini-2.0-flash")
 
 # --- Agent Callback --- 
 def before_agent_starts(callback_context: CallbackContext):
@@ -22,6 +30,7 @@ def before_agent_starts(callback_context: CallbackContext):
     agent: LlmAgent = callback_context._invocation_context.agent 
     
     logging.info("Executing before_agent_callback...")
+    logging.info(f"Using RAG Model: {RAG_MODEL_ID}, Main Model: {MAIN_MODEL_ID}") # Log models being used
 
     # --- Load state from file ---
     loaded_state_data = None
@@ -77,8 +86,8 @@ def before_agent_starts(callback_context: CallbackContext):
                                       similarity_top_k=5,
                                       vector_distance_threshold=0.5)))
         tool_model_id = "gemini-2.0-flash"
-        rag_model_instance = GenerativeModel(tool_model_id, tools=[rag_retrieval_tool])
-        logging.info(f"Internal RAG model ({tool_model_id}) for tool initialized successfully.")
+        rag_model_instance = GenerativeModel(RAG_MODEL_ID, tools=[rag_retrieval_tool])
+        logging.info(f"Internal RAG model ({RAG_MODEL_ID}) for tool initialized successfully.")
     except Exception as e:
         logging.exception("Failed to initialize RAG model in callback:")
         agent.tools = [] 
@@ -108,7 +117,7 @@ def before_agent_starts(callback_context: CallbackContext):
 # Use LlmAgent directly or keep Agent alias if preferred
 main_agent = LlmAgent(
     name="coding_assistant",
-    model="gemini-2.0-flash", # Model used by the agent itself - ensure this matches your preference
+    model=MAIN_MODEL_ID, # Use MAIN_MODEL_ID here
     instruction="""You are a helpful coding assistant.
 You have access to a tool that can search a specific codebase that has been indexed.
 Use the 'query_rag_codebase_impl' tool ONLY if the user asks a question specifically about the indexed codebase.
