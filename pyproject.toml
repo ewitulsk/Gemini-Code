@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gemini_code"
+version = "0.1.0"
+description = "A sample project" # TODO: Update description
+readme = "README.md"
+requires-python = ">=3.8" # TODO: Adjust Python version if needed
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License", # TODO: Choose appropriate license
+    "Operating System :: OS Independent",
+]
+# Add dependencies here if needed, e.g.:
+# dependencies = [
+#     "requests",
+# ]
+
+[project.urls]
+"Homepage" = "https://github.com/yourusername/gemini_code" # TODO: Update URL
+"Bug Tracker" = "https://github.com/yourusername/gemini_code/issues" # TODO: Update URL
+
+[tool.setuptools.packages.find]
+where = ["src"]  # look for packages in src/
+
+# Add pytest configuration if using pytest
+[tool.pytest.ini_options]
+pythonpath = [
+  "src"
+]
+testpaths = [
+    "tests",
+]

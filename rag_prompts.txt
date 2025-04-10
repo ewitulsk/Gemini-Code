@@ -1,0 +1,21 @@
+In this file, I got the error: 
+2025-04-09 22:56:51,721 - INFO - Creating RAG Corpus: my-coding-agent-corpus
+2025-04-09 22:58:52,970 - INFO - Created RAG Corpus: projects/251475227495/locations/us-central1/ragCorpora/6917529027641081856 (ID: 6917529027641081856)
+2025-04-09 22:58:52,971 - INFO - Starting RAG file import from gs://gemini-code-gen-lang-rag-store/code_upload/ into projects/251475227495/locations/us-central1/ragCorpora/6917529027641081856...
+2025-04-09 22:58:52,971 - ERROR - Error importing files into RAG Corpus projects/251475227495/locations/us-central1/ragCorpora/6917529027641081856: import_files() got an unexpected keyword argument 'gcs_source_uris'
+2025-04-09 22:58:52,971 - ERROR - RAG setup function returned failure.
+RAG setup failed. Please check the logs above for details.
+Agent initialization failed due to RAG setup/model init error.
+Agent script exited with error code 1.
+
+I am trying to build an ai coding agent using google's agent sdk: @https://github.com/google/adk-python 
+
+This is the rag overview: @https://cloud.google.com/vertex-ai/generative-ai/docs/rag-overview 
+And a getting started in python: @https://github.com/GoogleCloudPlatform/generative-ai/blob/main/gemini/rag-engine/intro_rag_engine.ipynb 
+@https://github.com/GoogleCloudPlatform/generative-ai/blob/main/gemini/rag-engine/rag_engine_eval_service_sdk.ipynb 
+@https://github.com/GoogleCloudPlatform/generative-ai/blob/main/gemini/rag-engine/rag_engine_evaluation.ipynb 
+@https://github.com/GoogleCloudPlatform/generative-ai/blob/main/gemini/rag-engine/rag_engine_feature_store.ipynb 
+@https://github.com/GoogleCloudPlatform/generative-ai/blob/main/gemini/rag-engine/rag_engine_pinecone.ipynb 
+@https://github.com/GoogleCloudPlatform/generative-ai/blob/main/gemini/rag-engine/rag_engine_vector_search.ipynb 
+@https://github.com/GoogleCloudPlatform/generative-ai/blob/main/gemini/rag-engine/rag_engine_vertex_ai_search.ipynb 
+@https://github.com/GoogleCloudPlatform/generative-ai/blob/main/gemini/rag-engine/rag_engine_weaviate.ipynb 
