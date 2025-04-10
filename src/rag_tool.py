@@ -1,5 +1,8 @@
 import logging
 from .state import RagState
+from vertexai.preview import rag
+from vertexai.preview.generative_models import GenerativeModel, Tool
+from typing import Callable
 
 
 def create_rag_tool_closure(state: RagState):
@@ -54,6 +57,52 @@ def create_rag_tool_closure(state: RagState):
 
     # Return the inner function (the closure)
     return query_rag_codebase_impl
+
+# New function to initialize the RAG model and create the tool
+def initialize_rag_tool(project_id: str, location: str, rag_corpus_name: str, rag_model_id: str) -> Callable | None:
+    """Initializes the internal RAG model and creates the RAG tool function.
+
+    Args:
+        project_id: Google Cloud Project ID.
+        location: Google Cloud resource location (e.g., 'us-central1').
+        rag_corpus_name: The full resource name of the RAG Corpus.
+        rag_model_id: The identifier for the Gemini model to use internally for RAG.
+
+    Returns:
+        The callable RAG tool function (closure) if successful, otherwise None.
+    """
+    rag_model_instance = None
+    try:
+        logging.info(f"Initializing internal RAG model for tool (Corpus: {rag_corpus_name}, Model: {rag_model_id})...")
+        # Ensure the corpus name is the full resource path if needed, or just the ID if API handles it.
+        # Assuming rag.RagResource expects the full name based on current coding_agent.py usage
+        rag_resource = rag.RagResource(rag_corpus=rag_corpus_name) 
+        rag_retrieval_tool = Tool.from_retrieval(retrieval=rag.Retrieval(
+            source=rag.VertexRagStore(rag_resources=[rag_resource],
+                                      similarity_top_k=5,
+                                      vector_distance_threshold=0.5)))
+        
+        rag_model_instance = GenerativeModel(rag_model_id, tools=[rag_retrieval_tool])
+        logging.info(f"Internal RAG model ({rag_model_id}) for tool initialized successfully.")
+    except Exception as e:
+        logging.exception(f"Failed to initialize RAG model for tool: {e}")
+        return None # Return None on failure
+
+    if rag_model_instance:
+        # Create a temporary state object JUST for the closure factory
+        # It holds the model and necessary identifiers needed by the closure's logic
+        tool_state = RagState() 
+        tool_state.rag_model = rag_model_instance
+        tool_state.project_id = project_id # Pass necessary info
+        tool_state.rag_corpus_name = rag_corpus_name # Pass necessary info
+        
+        # Call the factory to get the actual tool function (closure)
+        rag_tool_function = create_rag_tool_closure(tool_state)
+        logging.info(f"RAG tool closure '{rag_tool_function.__name__}' created successfully.")
+        return rag_tool_function
+    else:
+        logging.warning("RAG model instance not created. Cannot create tool.")
+        return None
 
 # The original function is no longer needed directly as a tool
 # def query_rag_codebase(query: str, state: RagState) -> dict:

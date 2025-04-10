@@ -5,12 +5,10 @@ import json # Import json
 from google.adk.agents import Agent, LlmAgent # Import base Agent/LlmAgent
 from google.adk.agents.callback_context import CallbackContext
 from google.cloud import aiplatform # Needed for init in callback
-from vertexai.preview import rag
-from vertexai.preview.generative_models import GenerativeModel, Tool
 from dotenv import load_dotenv
 
 # Import the factory function, not the old implementation
-from .rag_tool import create_rag_tool_closure
+from .rag_tool import initialize_rag_tool
 from .state import RagState # Keep RagState if needed for type hints or instantiation
 
 load_dotenv()
@@ -76,41 +74,21 @@ def before_agent_starts(callback_context: CallbackContext):
         agent.tools = []
         return
 
-    # 3. Initialize the RAG model needed *by the tool*
-    rag_model_instance = None # Use a local var for the model instance
-    try:
-        logging.info(f"Initializing internal RAG model for tool (Corpus: {rag_corpus_name})...")
-        rag_resource = rag.RagResource(rag_corpus=rag_corpus_name)
-        rag_retrieval_tool = Tool.from_retrieval(retrieval=rag.Retrieval(
-            source=rag.VertexRagStore(rag_resources=[rag_resource],
-                                      similarity_top_k=5,
-                                      vector_distance_threshold=0.5)))
-        tool_model_id = "gemini-2.0-flash"
-        rag_model_instance = GenerativeModel(RAG_MODEL_ID, tools=[rag_retrieval_tool])
-        logging.info(f"Internal RAG model ({RAG_MODEL_ID}) for tool initialized successfully.")
-    except Exception as e:
-        logging.exception("Failed to initialize RAG model in callback:")
-        agent.tools = [] 
-        return
+    # 3. Initialize the RAG tool using the dedicated function
+    # The RAG_MODEL_ID is needed for the internal model used by the tool
+    rag_tool_function = initialize_rag_tool(
+        project_id=project_id, 
+        location=location, 
+        rag_corpus_name=rag_corpus_name, 
+        rag_model_id=RAG_MODEL_ID # Pass the correct model ID
+    )
 
-    # 4. Create the tool closure using the factory function
-    if rag_model_instance:
-        # Create a temporary state object for the closure
-        tool_state = RagState()
-        tool_state.rag_model = rag_model_instance
-        tool_state.project_id = project_id
-        tool_state.rag_corpus_name = rag_corpus_name
-        
-        # Call the factory to get the actual tool function (closure)
-        rag_tool_function = create_rag_tool_closure(tool_state)
-        
-        # The factory function returns the inner function with the correct
-        # name ('query_rag_codebase_impl') and docstring already set.
-        # We pass this function directly to the agent's tools list.
+    # 4. Add the tool to the agent if initialization was successful
+    if rag_tool_function:
         agent.tools = [rag_tool_function]
         logging.info(f"RAG tool '{rag_tool_function.__name__}' dynamically added to agent '{agent.name}'.")
     else:
-        logging.warning("RAG model instance not created. No tool added.")
+        logging.warning("Failed to initialize RAG tool. No RAG tool added to agent.")
         agent.tools = []
 
 # --- Agent Definition ---
